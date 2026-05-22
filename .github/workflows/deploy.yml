@@ -18,8 +18,7 @@ jobs:
         extensions: ctype, json, mbstring, openssl, xml, zip, pdo_mysql
 
     - name: Install Composer Dependencies
-      run: composer install --prune-dev --no-interaction --prefer-dist --optimize-autoloader
-
+      run: composer install --prefer-dist --no-ansi --no-interaction --no-progress --no-scripts --no-dev
     - name: Install Serverless Framework
       run: npm install -g serverless
 
