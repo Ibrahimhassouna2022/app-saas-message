@@ -18,7 +18,5 @@ functions:
         handler: public/index.php
         description: 'SaaS Messaging API Gateway'
         timeout: 28 # الحد الأقصى الافتراضي للـ API Gateway بالأمازون
-        layers:
-            - ${bref:layer.php-82-fpm} # يخبر أمازون بتشغيل حزمة الـ PHP المطلوبة
         events:
             - httpApi: '*'
