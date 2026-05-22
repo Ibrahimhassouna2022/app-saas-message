@@ -1,0 +1,25 @@
+service: saas-messaging-api
+
+provider:
+    name: aws
+    region: us-east-1   
+    runtime: php-82-fpm # تأكد أن جهازك والـ GitHub Actions يستخدمان PHP 8.2
+    environment:
+        APP_ENV: production
+        APP_CONFIG_CACHE: '/tmp/storage/framework/config.php'
+        APP_ROUTES_CACHE: '/tmp/storage/framework/routes.php'
+
+plugins:
+    - ./vendor/bref/bref
+    - ./vendor/bref/laravel-bridge # ضروري جداً لربط Serverless مع Laravel
+
+functions:
+    # دالة معالجة الـ API وتوجيه الروابط بالكامل لارافل
+    api:
+        handler: public/index.php
+        description: 'SaaS Messaging API Gateway'
+        timeout: 28 # الحد الأقصى الافتراضي للـ API Gateway بالأمازون
+        layers:
+            - ${bref:layer.php-82-fpm} # يخبر أمازون بتشغيل حزمة الـ PHP المطلوبة
+        events:
+            - httpApi: '*'

@@ -1,0 +1,293 @@
+================================================================
+         تقرير تحويل المشروع إلى SaaS
+         الرقم الجامعي: 120220418
+================================================================
+
+المشروع: saas-messaging
+التقنيات: Laravel 12 + stancl/tenancy v3 + nwidart/laravel-modules v12
+التاريخ: مايو 2026
+
+----------------------------------------------------------------
+١. ما هو SaaS وما الهدف من التحويل؟
+----------------------------------------------------------------
+SaaS (Software as a Service) هو نموذج برمجي يُقدَّم فيه التطبيق
+كخدمة عبر الإنترنت لعملاء (شركات) متعددين في آنٍ واحد، مع عزل
+تام لبيانات كل شركة عن الأخرى.
+
+المشروع كان في الأصل تطبيق Laravel تقليدي (Monolithic) بقاعدة
+بيانات واحدة مشتركة. تم تحويله إلى معمارية Multi-Tenant SaaS
+بحيث تخدم كل شركة قاعدةَ بياناتها المستقلة وخطةَ اشتراكها الخاصة.
+
+----------------------------------------------------------------
+٢. الحزم المُضافة لتفعيل SaaS
+----------------------------------------------------------------
+أ) stancl/tenancy (^3.10)
+   الدور: إدارة المستأجرين (Tenants)، عزل قواعد البيانات تلقائياً،
+   تهيئة سياق الشركة مع كل طلب HTTP.
+
+ب) nwidart/laravel-modules (^12.0)
+   الدور: تنظيم الكود في وحدات مستقلة (Modules) بدل الهيكلية
+   المكتلة، كل وحدة لها Controllers وModels وMigrations خاصة بها.
+
+ج) wikimedia/composer-merge-plugin
+   الدور: دمج ملفات composer.json الخاصة بكل وحدة تلقائياً.
+
+في ملف composer.json:
+  "require": {
+      "nwidart/laravel-modules": "^12.0",
+      "stancl/tenancy": "^3.10"
+  }
+
+وتم إضافة namespace المودولات في autoload:
+  "autoload": {
+      "psr-4": {
+          "App\\": "app/",
+          "Modules\\": "Modules/"
+      }
+  }
+
+----------------------------------------------------------------
+٣. نموذج المستأجر (Tenant Model) — app/Models/Tenant.php
+----------------------------------------------------------------
+تم إنشاء نموذج Tenant مخصص يرث من BaseTenant ويطبق واجهة
+TenantWithDatabase، مما يمنحه قاعدة بيانات مستقلة:
+
+class Tenant extends BaseTenant implements TenantWithDatabase
+{
+    use HasDatabase, HasDomains;
+
+    public static function getCustomColumns(): array {
+        return [
+            'id',                   // معرف الشركة (slug)
+            'plan',                 // basic | premium | enterprise
+            'company_name',         // اسم الشركة
+            'admin_email',          // بريد المسؤول
+            'subscription_ends_at', // تاريخ انتهاء الاشتراك
+            'max_messages',         // الحد الأقصى للرسائل
+            'settings',             // إعدادات JSON مرنة
+        ];
+    }
+}
+
+كل شركة تحصل تلقائياً على قاعدة بيانات SQLite باسم tenant{id}.
+
+----------------------------------------------------------------
+٤. جدول tenants المركزي — database/migrations/
+----------------------------------------------------------------
+Schema::create('tenants', function (Blueprint $table) {
+    $table->string('id')->primary();       // company_slug
+    $table->string('plan')->default('basic');
+    $table->string('company_name');
+    $table->string('admin_email');
+    $table->date('subscription_ends_at')->nullable();
+    $table->integer('max_messages')->default(1000);
+    $table->json('settings')->nullable();
+    $table->json('data')->nullable();      // مطلوب من الحزمة
+    $table->timestamps();
+});
+
+وجدول domains لربط كل شركة بنطاقها الفرعي (subdomain).
+
+----------------------------------------------------------------
+٥. إعدادات Tenancy — config/tenancy.php
+----------------------------------------------------------------
+أ) تحديد نموذج المستأجر والمولّد:
+   'tenant_model'  => Tenant::class,
+   'id_generator'  => UUIDGenerator::class,
+
+ب) النطاقات المركزية (لا تعمل كمستأجرين):
+   'central_domains' => ['127.0.0.1', 'localhost'],
+
+ج) Bootstrappers — تُشغَّل تلقائياً عند تهيئة أي مستأجر:
+   DatabaseTenancyBootstrapper   // تبديل اتصال قاعدة البيانات
+   CacheTenancyBootstrapper      // عزل الكاش بـ tag خاص
+   FilesystemTenancyBootstrapper // عزل مجلدات التخزين
+   QueueTenancyBootstrapper      // عزل قوائم الانتظار
+
+د) ربط مسارات Migrations الخاصة بالمودولات:
+   'migration_parameters' => [
+       '--path' => [
+           database_path('migrations/tenant'),
+           base_path('Modules/Chat/Database/Migrations'),
+       ],
+   ],
+   هذا يجعل أمر (tenants:migrate) يُشغّل migrations وحدة Chat
+   على قاعدة بيانات كل شركة جديدة تلقائياً.
+
+----------------------------------------------------------------
+٦. مسارات المستأجر — routes/tenant.php
+----------------------------------------------------------------
+كل طلب يصل عبر subdomain الشركة يمر بثلاث طبقات حماية:
+
+Route::middleware([
+    'web',
+    InitializeTenancyByDomain::class,      // تحديد الشركة من domain
+    PreventAccessFromCentralDomains::class, // منع الوصول من localhost
+    SubscriptionMiddleware::class,          // التحقق من الاشتراك
+])->group(function () {
+    Route::prefix('chat')->group(function () {
+        Route::get('/',                    [ChatController::class, 'index']);
+        Route::get('/conversations',       [ChatController::class, 'getConversations']);
+        Route::post('/messages',           [ChatController::class, 'sendMessage']);
+        Route::get('/messages/{id}',       [ChatController::class, 'getMessages']);
+    });
+});
+
+----------------------------------------------------------------
+٧. Middleware الاشتراك — SubscriptionMiddleware.php
+----------------------------------------------------------------
+class SubscriptionMiddleware
+{
+    public function handle(Request $request, Closure $next)
+    {
+        $tenant = tenant();
+        if ($tenant && $tenant->subscription_ends_at
+            && now()->greaterThan($tenant->subscription_ends_at)) {
+            return response()->json([
+                'error' => 'انتهت صلاحية الاشتراك.',
+                'code'  => 'SUBSCRIPTION_EXPIRED'
+            ], 403);
+        }
+        return $next($request);
+    }
+}
+
+----------------------------------------------------------------
+٨. الهيكلية المعيارية (Multi-Modules) — المفهوم والتطبيق
+----------------------------------------------------------------
+أ) ما هي فكرة الـ Multi-Modules؟
+هي فكرة تقسيم التطبيق الكبير إلى تطبيقات صغيرة جداً ومستقلة تعمل معاً تحت سقف واحد.
+بدلاً من وضع كل الـ Controllers في مجلد واحد (الهيكلية المكتلة Monolithic)،
+نقوم بتجميع كل ميزة (Business Feature) في "مكتب مستقل" (الهيكلية المعيارية Modular).
+
+ب) هل هو ضروري وبناءً على ماذا نقوم بعمله؟
+في مشاريع SaaS، يُعتبر ضرورياً جداً. نحن نقوم بإنشاء Module بناءً على
+"الميزة المستقلة" (Business Domain). القاعدة الذهبية هي:
+(إذا كانت الميزة يمكن فصلها نظرياً لتعمل كنظام لوحدها، فهي تستحق أن تكون Module).
+مثلاً: المراسلة، الفواتير، إدارة الموظفين؛ كل واحدة منها توضع في موديول.
+الفوائد:
+- سهولة الصيانة والتطوير بمعزل عن باقي الأقسام.
+- تفعيل وتعطيل الميزات بسهولة لكل شركة.
+- منع تداخل الكود وتقسيم العمل بين المطورين بدون تعارض.
+
+ج) كيف تم التطبيق وما هي الموديولات المُنشأة في المشروع؟
+بما أن الهدف الأساسي هو "تطبيق SaaS للمراسلة"، تم بناء موديول واحد فقط
+وهو موديول الـ (Chat). هذا الموديول يكفي جداً لإثبات قوة المعمارية وإتمام المتطلبات.
+لكن مستقبلاً، يمكن إضافة موديولات أخرى بسهولة (مثل Billing) دون لمس كود الـ Chat.
+
+خطوات التطبيق العملي:
+١. تم تثبيت حزمة `nwidart/laravel-modules`.
+٢. تم إنشاء موديول `Chat` ليحتوي على كامل نظام المراسلة.
+٣. تم تفعيل الوحدة في ملف `modules_statuses.json`.
+٤. تم ربط مسارات الـ Migrations الخاصة بوحدة Chat مع إعدادات Tenancy لتُنفّذ في قاعدة بيانات الشركة.
+
+د) ماذا يحوي موديول (Chat) المطبق في المشروع؟
+يحتوي على نسخة مصغرة من Laravel خاصة بالمراسلة فقط:
+  Modules/Chat/
+  ├── Database/Migrations/ 
+  │   ├── create_conversations_table.php  ← جداول المحادثات (تُبنى في DB الشركة)
+  │   └── create_messages_table.php       ← جداول الرسائل (تُبنى في DB الشركة)
+  ├── Http/Controllers/
+  │   └── ChatController.php              ← العقل المدبر (إرسال، جلب، التحقق من حدود الخطة)
+  ├── Models/
+  │   ├── Conversation.php                ← نموذج المحادثة
+  │   └── Message.php                     ← نموذج الرسالة
+  └── Routes/
+      └── web.php                         ← روابط مسارات المراسلة (/chat/)
+
+هذا العزل الكامل يضمن أن قسم المراسلة مفصول تماماً ولن يتأثر بأي إضافات مستقبلية في النظام.
+
+----------------------------------------------------------------
+٩. نظام خطط الاشتراك في ChatController
+----------------------------------------------------------------
+يتحقق الـ Controller من خطة الشركة ويطبّق الحدود:
+
+private function getMessageLimit($plan): int
+{
+    return match($plan) {
+        'basic'      => 1000,
+        'premium'    => 10000,
+        'enterprise' => 100000,
+        default      => 500,
+    };
+}
+
+عند إرسال رسالة يتم:
+1. قراءة خطة الشركة:  $plan = tenant('plan');
+2. عدّ الرسائل الحالية في DB الشركة: Message::count();
+3. مقارنة العدد بالحد المسموح.
+4. رفض الطلب (403) إذا تجاوز الحد.
+5. إنشاء الرسالة في DB الشركة فقط (لا تؤثر على شركات أخرى).
+
+------------------------------------ج----------------------------
+١٠. آلية عزل البيانات — خلاصة التدفق
+----------------------------------------------------------------
+[1] يصل طلب HTTP عبر: company-a.localhost/chat/messages
+[2] InitializeTenancyByDomain يقرأ الـ domain ويجد الشركة
+[3] DatabaseTenancyBootstrapper يبدّل DB connection إلى tenant{id}
+[4] SubscriptionMiddleware يتحقق من صلاحية الاشتراك
+[5] ChatController يقرأ/يكتب في DB الشركة الحالية فقط
+[6] لا يمكن لأي شركة رؤية بيانات شركة أخرى (عزل كامل)
+
+----------------------------------------------------------------
+١١. النماذج (Models) المُنشأة في المشروع
+----------------------------------------------------------------
+كل Model في Laravel يمثّل جدولاً واحداً فقط في قاعدة البيانات.
+الجداول تُنشأ عبر Migrations وليس عبر الـ Model.
+الـ Model هو كلاس PHP يُتيح التعامل مع بيانات ذلك الجدول (CRUD)
+ويُحدّد العلاقات (Relationships) بين الجداول.
+
+[ أ ] Modules/Chat/Models/Conversation.php
+   الجدول: conversations (داخل قاعدة بيانات كل شركة)
+   الأعمدة: title, created_by, participants (JSON), timestamps
+   الدور: يمثّل المحادثات الخاصة بشركة واحدة فقط
+
+   protected $fillable = ['title', 'created_by', 'participants'];
+
+[ ب ] Modules/Chat/Models/Message.php
+   الجدول: messages (داخل قاعدة بيانات كل شركة)
+   الأعمدة: conversation_id, sender_id, body, is_read, timestamps
+   الدور: يمثّل الرسائل المرسلة داخل محادثة معينة
+   العلاقة: مرتبط بجدول conversations وجدول users
+
+   protected $fillable = ['conversation_id', 'sender_id', 'body', 'is_read'];
+   ملاحظة: يعمل دائماً داخل سياق الشركة (Tenant Context) لأن
+   قاعدة البيانات تتبدل تلقائياً عبر DatabaseTenancyBootstrapper.
+
+[ ج ] app/Models/Tenant.php
+   الجدول: tenants (قاعدة البيانات المركزية - Central DB)
+   الأعمدة: id, plan, company_name, admin_email,
+            subscription_ends_at, max_messages, settings, data
+   الدور: يمثّل كل شركة (مستأجر) في النظام
+   يرث من: Stancl\Tenancy\Database\Models\Tenant (BaseTenant)
+   يطبّق: TenantWithDatabase (قاعدة بيانات مستقلة لكل شركة)
+
+[ د ] app/Models/User.php
+   الجدول: users (داخل قاعدة بيانات كل شركة)
+   الأعمدة: id, name, email, password, timestamps
+   الدور: يمثّل مستخدمي الشركة — مستقل تماماً عن مستخدمي الشركات الأخرى
+
+ملخص العلاقة بين Migration والـ Model:
+   Migration  →  يُنشئ الجدول في قاعدة البيانات (CREATE TABLE)
+   Model      →  يتعامل مع بيانات الجدول (INSERT/SELECT/UPDATE/DELETE)
+   لا يحتاج Model أن يحتوي على تعريف الأعمدة — هذا دور Migration
+
+----------------------------------------------------------------
+١٢. جدول مقارنة — قبل وبعد التحويل
+----------------------------------------------------------------
+المكوّن              | قبل (Monolithic)     | بعد (SaaS)
+---------------------|----------------------|-----------------------
+قاعدة البيانات       | واحدة مشتركة         | مستقلة لكل شركة
+هيكلية الكود         | Monolithic           | Modular (Modules/)
+تعريف المستخدم       | لا يوجد              | Domain-based
+نظام الاشتراكات      | لا يوجد              | basic/premium/enterprise
+حماية البيانات       | لا عزل               | عزل كامل (Bootstrappers)
+الـ Middleware       | لا يوجد              | Tenancy+Subscription+Domain
+الـ Migrations       | مركزية واحدة          | مركزية + خاصة بكل مستأجر
+قابلية التوسع        | صعبة                 | سهلة (وحدات مستقلة)
+
+================================================================
+         الرقم الجامعي: 120220418
+         نظام المراسلة متعدد المستأجرين
+         مايو 2026
+================================================================
