@@ -20,7 +20,7 @@ jobs:
     - name: Install Composer Dependencies
       run: composer install --prefer-dist --no-ansi --no-interaction --no-progress --no-scripts --no-dev
     - name: Install Serverless Framework
-      run: npm install -g serverless
+      run: npm install -g serverless@3
 
     - name: Deploy to AWS
       env:
