@@ -3,9 +3,10 @@ service: saas-messaging-api
 provider:
     name: aws
     region: us-east-1   
-    runtime: php-82-fpm # تأكد أن جهازك والـ GitHub Actions يستخدمان PHP 8.2
+    runtime: php-82-fpm # تأكد أن الـ GitHub Actions وجهازك مضبوطان على PHP 8.2
     environment:
         APP_ENV: production
+        APP_KEY: ${{env:APP_KEY}} # سيقوم بقراءة المفتاح مباشرة من بيئة الـ Deployment الممررة
         APP_CONFIG_CACHE: '/tmp/storage/framework/config.php'
         APP_ROUTES_CACHE: '/tmp/storage/framework/routes.php'
 

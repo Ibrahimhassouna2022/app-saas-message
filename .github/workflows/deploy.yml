@@ -26,4 +26,5 @@ jobs:
       env:
         AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
         AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        APP_KEY: "base64:Un2ZW/JaX0MmnI8eELjRdBQJG0sDJO+9p1XHOnvGNks="
       run: serverless deploy
