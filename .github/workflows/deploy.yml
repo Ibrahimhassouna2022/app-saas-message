@@ -18,7 +18,7 @@ jobs:
         extensions: ctype, json, mbstring, openssl, xml, zip, pdo_mysql
 
     - name: Install Composer Dependencies
-        run: composer install --prefer-dist --no-ansi --no-interaction --no-progress --no-scripts --no-dev
+      run: composer install --prefer-dist --no-ansi --no-interaction --no-progress --no-scripts --no-dev
     - name: Clear Laravel caches
       run: php artisan config:clear && php artisan cache:clear && php artisan view:clear
     - name: Install Serverless Framework
