@@ -8,6 +8,8 @@ provider:
         APP_ENV: production
         APP_DEBUG: 'true'
         APP_KEY: ${env:APP_KEY} # سيقوم بقراءة المفتاح مباشرة من بيئة الـ Deployment الممررة
+        SESSION_DRIVER: cookie
+        CACHE_STORE: array
 
 plugins:
     - ./vendor/bref/bref
