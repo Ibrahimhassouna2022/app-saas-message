@@ -7,7 +7,7 @@ provider:
     environment:
         APP_ENV: production
         APP_DEBUG: 'true'
-        APP_KEY: ${{env:APP_KEY}} # سيقوم بقراءة المفتاح مباشرة من بيئة الـ Deployment الممررة
+        APP_KEY: ${env:APP_KEY} # سيقوم بقراءة المفتاح مباشرة من بيئة الـ Deployment الممررة
 
 plugins:
     - ./vendor/bref/bref
