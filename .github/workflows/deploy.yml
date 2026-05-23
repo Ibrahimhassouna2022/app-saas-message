@@ -7,6 +7,13 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    env:
+      APP_KEY: "base64:Un2ZW/JaX0MmnI8eELjRdBQJG0sDJO+9p1XHOnvGNks="
+      DB_CONNECTION: sqlite
+      DB_DATABASE: ":memory:"
+      CACHE_STORE: array
+      SESSION_DRIVER: array
+      QUEUE_CONNECTION: sync
 
     steps:
     - uses: actions/checkout@v4
@@ -28,5 +35,4 @@ jobs:
       env:
         AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
         AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        APP_KEY: "base64:Un2ZW/JaX0MmnI8eELjRdBQJG0sDJO+9p1XHOnvGNks="
       run: serverless deploy
